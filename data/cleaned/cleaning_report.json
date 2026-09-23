@@ -1,25 +1,122 @@
 {
   "cleaned_on": "2026-09-23",
+  "source": {
+    "daily_input": "/home/ethereal/AShare_DeepAlpha/data/j66_money_finance_daily_2018_2024.csv",
+    "constituents_input": "/home/ethereal/AShare_DeepAlpha/data/j66_money_finance_constituents.csv",
+    "trading_date_start": "2018-01-02",
+    "trading_date_end": "2024-12-31",
+    "trading_date_count": 1699,
+    "security_count": 45
+  },
+  "parameters": {
+    "min_listing_trading_days": 250,
+    "price_limit_detection": "Daily high/low reached the exchange price-limit price; the first listing session is excluded."
+  },
   "rules": {
-    "missing_values": "Rows containing blank, NA, N/A, NaN, or null values are removed.",
-    "date_format": "YYYY-MM-DD",
-    "stock_code_format": "lowercase exchange prefix plus a period and six digits",
-    "price_format": "four decimal places",
-    "volume_format": "integer",
-    "amount_format": "two decimal places",
-    "turn_and_pctChg_format": "six decimal places",
-    "status_flag_format": "integer"
+    "missing_values": "Rows with a missing value in any expected source column are removed from the cleaned daily table.",
+    "suspension": "tradestatus=0 is classified as suspended. Suspended rows are kept in the status ledger and are removed from the clean table when they also contain missing fields.",
+    "not_listed": "A date before the first observed date for a code is classified as not_listed in the full date-code status ledger.",
+    "listing_age": "Listing age is counted dynamically on the global trading calendar, inclusive of the listing session.",
+    "data_types": {
+      "date": "YYYY-MM-DD",
+      "code": "exchange prefix plus period and six digits",
+      "price": "four decimal places",
+      "volume": "integer",
+      "amount": "two decimal places",
+      "turn_and_pctChg": "six decimal places",
+      "flags_and_listing_age": "integer"
+    }
   },
   "daily_data": {
     "input_rows": 68225,
-    "output_rows": 68061,
+    "identity_valid_rows": 68225,
+    "complete_valid_rows": 68061,
     "dropped_missing_value_rows": 164,
-    "dropped_invalid_format_rows": 0
+    "dropped_invalid_identity_rows": 0,
+    "dropped_invalid_format_rows": 0,
+    "dropped_duplicate_rows": 0,
+    "dropped_listed_less_than_one_year_rows": 11076,
+    "output_rows": 56985,
+    "output_security_status": {
+      "limit_down": 79,
+      "limit_up": 262,
+      "normal": 56644
+    }
+  },
+  "status_ledger": {
+    "output_rows": 76455,
+    "security_status": {
+      "limit_down": 79,
+      "limit_up": 262,
+      "listed_less_than_one_year": 11076,
+      "normal": 56644,
+      "not_listed": 8230,
+      "suspended": 164
+    },
+    "trading_status": {
+      "not_listed": 8230,
+      "suspended": 164,
+      "trading": 68061
+    },
+    "price_limit_status": {
+      "limit_down": 141,
+      "limit_up": 440,
+      "none": 67480,
+      "not_applicable": 8394
+    }
   },
   "constituents_data": {
     "input_rows": 45,
     "output_rows": 45,
     "dropped_missing_value_rows": 0,
-    "dropped_invalid_format_rows": 0
+    "dropped_invalid_format_rows": 0,
+    "dropped_duplicate_rows": 0
+  },
+  "listing_dates": {
+    "sh.600000": "2018-01-02",
+    "sh.600015": "2018-01-02",
+    "sh.600016": "2018-01-02",
+    "sh.600036": "2018-01-02",
+    "sh.600318": "2018-01-02",
+    "sh.600901": "2018-03-01",
+    "sh.600908": "2018-01-02",
+    "sh.600919": "2018-01-02",
+    "sh.600926": "2018-01-02",
+    "sh.600928": "2019-03-01",
+    "sh.601009": "2018-01-02",
+    "sh.601077": "2019-10-29",
+    "sh.601128": "2018-01-02",
+    "sh.601166": "2018-01-02",
+    "sh.601169": "2018-01-02",
+    "sh.601187": "2020-10-27",
+    "sh.601229": "2018-01-02",
+    "sh.601288": "2018-01-02",
+    "sh.601328": "2018-01-02",
+    "sh.601398": "2018-01-02",
+    "sh.601528": "2021-06-25",
+    "sh.601577": "2018-09-26",
+    "sh.601658": "2019-12-10",
+    "sh.601665": "2021-06-18",
+    "sh.601818": "2018-01-02",
+    "sh.601825": "2021-08-19",
+    "sh.601838": "2018-01-31",
+    "sh.601860": "2019-01-03",
+    "sh.601916": "2019-11-26",
+    "sh.601939": "2018-01-02",
+    "sh.601963": "2021-02-05",
+    "sh.601988": "2018-01-02",
+    "sh.601997": "2018-01-02",
+    "sh.601998": "2018-01-02",
+    "sh.603323": "2018-01-02",
+    "sz.000001": "2018-01-02",
+    "sz.000617": "2018-01-02",
+    "sz.001227": "2022-01-17",
+    "sz.002142": "2018-01-02",
+    "sz.002807": "2018-01-02",
+    "sz.002839": "2018-01-02",
+    "sz.002936": "2018-09-19",
+    "sz.002948": "2019-01-16",
+    "sz.002958": "2019-03-26",
+    "sz.002966": "2019-08-02"
   }
 }
