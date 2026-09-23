@@ -1,0 +1,13 @@
+{
+  "industry_code": "J66",
+  "industry_name": "货币金融服务",
+  "start_date": "2018-01-01",
+  "end_date": "2024-12-31",
+  "adjustment": "none",
+  "data_source": "Baostock",
+  "download_date": "2026-09-21",
+  "constituent_count": 45,
+  "downloaded_code_count": 45,
+  "row_count": 68225,
+  "failed_codes": []
+}

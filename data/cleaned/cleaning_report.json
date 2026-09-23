@@ -1,0 +1,25 @@
+{
+  "cleaned_on": "2026-09-23",
+  "rules": {
+    "missing_values": "Rows containing blank, NA, N/A, NaN, or null values are removed.",
+    "date_format": "YYYY-MM-DD",
+    "stock_code_format": "lowercase exchange prefix plus a period and six digits",
+    "price_format": "four decimal places",
+    "volume_format": "integer",
+    "amount_format": "two decimal places",
+    "turn_and_pctChg_format": "six decimal places",
+    "status_flag_format": "integer"
+  },
+  "daily_data": {
+    "input_rows": 68225,
+    "output_rows": 68061,
+    "dropped_missing_value_rows": 164,
+    "dropped_invalid_format_rows": 0
+  },
+  "constituents_data": {
+    "input_rows": 45,
+    "output_rows": 45,
+    "dropped_missing_value_rows": 0,
+    "dropped_invalid_format_rows": 0
+  }
+}
