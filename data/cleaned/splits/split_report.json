@@ -1,0 +1,43 @@
+{
+  "source_file": "data/cleaned/j66_money_finance_daily_2018_2024.csv",
+  "split_method": "chronological_by_unique_trading_date",
+  "date_grouping": "All records sharing one trading date are assigned to the same split.",
+  "ratios": {
+    "train": "0.70",
+    "validation": "0.10",
+    "test": "0.10",
+    "final_oos": "0.10"
+  },
+  "label_leakage_note": "These files split feature rows by date. When forward-looking labels are added, apply a purge/embargo around split boundaries according to the label horizon.",
+  "splits": {
+    "train": {
+      "file": "data/cleaned/splits/train.csv",
+      "trading_dates": 1015,
+      "start_date": "2019-01-10",
+      "end_date": "2023-03-17",
+      "rows": 37416
+    },
+    "validation": {
+      "file": "data/cleaned/splits/validation.csv",
+      "trading_dates": 145,
+      "start_date": "2023-03-20",
+      "end_date": "2023-10-24",
+      "rows": 6519
+    },
+    "test": {
+      "file": "data/cleaned/splits/test.csv",
+      "trading_dates": 145,
+      "start_date": "2023-10-25",
+      "end_date": "2024-05-30",
+      "rows": 6525
+    },
+    "final_oos": {
+      "file": "data/cleaned/splits/final_oos.csv",
+      "trading_dates": 145,
+      "start_date": "2024-05-31",
+      "end_date": "2024-12-31",
+      "rows": 6525
+    }
+  },
+  "final_oos_usage": "Keep final_oos untouched during feature/model selection and evaluate it once after the research choices are frozen."
+}
