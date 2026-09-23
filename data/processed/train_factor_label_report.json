@@ -1,0 +1,101 @@
+{
+  "created_on": "2026-09-23",
+  "input_training_file": "/home/ethereal/AShare_DeepAlpha/data/cleaned/splits/train.csv",
+  "history_context_file": "/home/ethereal/AShare_DeepAlpha/data/j66_money_finance_daily_2018_2024.csv",
+  "output_file": "/home/ethereal/AShare_DeepAlpha/data/processed/train_factor_labels.csv",
+  "training_period": {
+    "start_date": "2019-01-10",
+    "end_date": "2023-03-17",
+    "trading_dates": 1015,
+    "input_rows": 37416
+  },
+  "history_context": {
+    "input_rows": 68225,
+    "usable_trading_rows_at_or_before_train_end": 48492,
+    "non_trading_rows_excluded": 158,
+    "incomplete_or_invalid_rows_excluded": 0,
+    "rows_after_training_end_excluded": 19575,
+    "history_start_date": "2018-01-02",
+    "history_end_date": "2023-03-17"
+  },
+  "factor_hypotheses": {
+    "momentum": "Recent trend may persist over short horizons; test sign and stability.",
+    "volatility": "High realized volatility may proxy for risk and unstable returns.",
+    "volume_and_amount": "Relative activity may represent attention, liquidity, or reversal.",
+    "range_and_gap": "Intraday range and opening gap may capture price pressure.",
+    "amihud": "Higher absolute price impact per traded amount may indicate illiquidity.",
+    "rsi": "Recent gain/loss imbalance may capture short-horizon momentum or reversal.",
+    "status": "Exploratory hypotheses only; predictive value has not been evaluated."
+  },
+  "factor_definitions": {
+    "ret_1": "One previous valid stock observation close-to-close return.",
+    "mom_5/mom_20/mom_60": "Close-to-close return over 5/20/60 previous valid stock observations.",
+    "volatility_5/20/60": "Population standard deviation of the latest 5/20/60 close returns.",
+    "sma_ratio_5_20/sma_ratio_20_60": "Ratio of trailing close moving averages minus one.",
+    "volume_ratio_5_20": "Trailing 5-observation mean volume divided by 20-observation mean, minus one.",
+    "amount_ratio_5_20": "Trailing 5-observation mean amount divided by 20-observation mean, minus one.",
+    "turnover_mean_20": "Mean turnover across the latest 20 valid observations.",
+    "intraday_range_pct": "(High - low) / close for the current observation.",
+    "close_location": "(2 * close - high - low) / (high - low), with zero for zero-range bars.",
+    "open_gap_pct": "Open / preclose - one for the current observation.",
+    "amihud_20": "Mean absolute close return / amount over 20 observations, scaled by 1e8.",
+    "rsi_14": "Simple-average RSI over the latest 14 close-return observations.",
+    "fwd_return_5d/fwd_return_20d": "Same-security close-to-close return to exactly 5/20 later training market dates; rows without an in-training endpoint are excluded."
+  },
+  "label_definition": {
+    "basis": "Unadjusted close-to-close simple return.",
+    "horizons": "5 and 20 subsequent dates in the training split trading calendar.",
+    "entry_execution": "Research label only; it is not an executable return model. Backtests must model signal availability and next-session fills."
+  },
+  "data_limitations": [
+    "The raw source uses adjustflag=3 (unadjusted); corporate actions can distort both factors and labels.",
+    "Factor windows count valid per-security observations and can span suspension or missing-data gaps.",
+    "Training inputs have already filtered securities by the project listing-age rule.",
+    "No cross-sectional scaling or imputation is applied; fit any learned transform on training data only."
+  ],
+  "row_counts": {
+    "input_training_rows": 37416,
+    "output_rows_with_all_factors_and_labels": 36467,
+    "dropped_rows_by_reason": {
+      "label_horizon_outside_training": 900,
+      "label_target_missing": 49
+    }
+  },
+  "leakage_audit": {
+    "feature_count": 17,
+    "feature_fields": [
+      "ret_1",
+      "mom_5",
+      "mom_20",
+      "mom_60",
+      "volatility_5",
+      "volatility_20",
+      "volatility_60",
+      "sma_ratio_5_20",
+      "sma_ratio_20_60",
+      "volume_ratio_5_20",
+      "amount_ratio_5_20",
+      "turnover_mean_20",
+      "intraday_range_pct",
+      "close_location",
+      "open_gap_pct",
+      "amihud_20",
+      "rsi_14"
+    ],
+    "label_horizons_trading_days": [
+      5,
+      20
+    ],
+    "feature_lookback_start_date": "2018-10-16",
+    "feature_row_start_date": "2019-01-10",
+    "factor_as_of_end_date": "2023-03-17",
+    "max_label_end_date": "2023-03-17",
+    "feature_history_is_past_only": true,
+    "labels_end_within_training_dates": true,
+    "label_endpoints_strictly_after_signal_date": true,
+    "label_horizons_match_training_calendar_offsets": true,
+    "label_lookup_uses_same_code_and_training_rows_only": true,
+    "cross_sectional_normalization_fitted": false,
+    "post_training_rows_used_for_features_or_labels": false
+  }
+}
