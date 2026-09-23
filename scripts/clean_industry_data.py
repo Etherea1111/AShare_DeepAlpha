@@ -99,6 +99,7 @@ class Presence:
     quality: str
 
 
+# 解析清洗流程的输入、输出和上市年限参数。
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -127,14 +128,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# 判断字段是否为空或属于约定的缺失值标记。
 def is_missing(value: str | None) -> bool:
     return value is None or value.strip().casefold() in MISSING_VALUES
 
 
+# 清理文本首尾空白并合并内部连续空白。
 def normalize_text(value: str) -> str:
     return " ".join(value.strip().split())
 
 
+# 将支持的日期格式统一转换为日期对象。
 def normalize_date(value: str) -> date:
     raw_value = normalize_text(value)
     for date_format in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d"):
@@ -145,6 +149,7 @@ def normalize_date(value: str) -> date:
     raise ValueError(f"Invalid date: {value!r}")
 
 
+# 校验证券代码并统一为交易所前缀加代码的格式。
 def normalize_code(value: str) -> str:
     match = CODE_PATTERN.fullmatch(normalize_text(value))
     if not match:
@@ -152,6 +157,7 @@ def normalize_code(value: str) -> str:
     return f"{match.group(1).lower()}.{match.group('number')}"
 
 
+# 解析并校验有限十进制数值。
 def parse_decimal(value: str) -> Decimal:
     try:
         number = Decimal(normalize_text(value).replace(",", ""))
@@ -162,12 +168,14 @@ def parse_decimal(value: str) -> Decimal:
     return number
 
 
+# 按指定小数位数和四舍五入规则规范化数值文本。
 def normalize_decimal(value: str, places: int) -> str:
     scale = Decimal(1).scaleb(-places)
     number = parse_decimal(value).quantize(scale, rounding=ROUND_HALF_UP)
     return format(number, f".{places}f")
 
 
+# 将数值文本校验并转换为整数。
 def normalize_integer(value: str) -> int:
     number = parse_decimal(value)
     if number != number.to_integral_value():
@@ -175,6 +183,7 @@ def normalize_integer(value: str) -> int:
     return int(number)
 
 
+# 规范化单条日行情记录中的日期、代码和数值字段。
 def normalize_daily_row(row: dict[str, str]) -> dict[str, str]:
     normalized_date = normalize_date(row["date"])
     normalized_code = normalize_code(row["code"])
@@ -202,6 +211,7 @@ def normalize_daily_row(row: dict[str, str]) -> dict[str, str]:
     return normalized
 
 
+# 规范化单条行业成分股记录。
 def normalize_constituent_row(row: dict[str, str]) -> dict[str, str]:
     return {
         "code": normalize_code(row["code"]),
@@ -213,6 +223,7 @@ def normalize_constituent_row(row: dict[str, str]) -> dict[str, str]:
     }
 
 
+# 读取并去重行业成分股，同时统计被剔除记录。
 def read_constituents(
     input_path: Path,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
@@ -254,6 +265,7 @@ def read_constituents(
     return rows, result
 
 
+# 读取日行情并分离完整数据、记录状态和证券上市信息。
 def read_daily(
     input_path: Path,
 ) -> tuple[
@@ -360,6 +372,7 @@ def read_daily(
     )
 
 
+# 提取计算涨跌停价格所需的数值字段。
 def parse_numeric_fields(row: dict[str, str]) -> dict[str, Decimal]:
     return {
         field: parse_decimal(row[field])
@@ -372,6 +385,7 @@ def parse_numeric_fields(row: dict[str, str]) -> dict[str, Decimal]:
     }
 
 
+# 根据证券板块和 ST 状态返回适用的涨跌幅限制比例。
 def limit_rate(code: str, is_st: int) -> Decimal:
     if is_st == 1:
         return Decimal("0.05")
@@ -382,6 +396,7 @@ def limit_rate(code: str, is_st: int) -> Decimal:
     return Decimal("0.10")
 
 
+# 判断当日最高价或最低价是否触及常规涨跌停价。
 def price_limit_status(
     row: dict[str, str],
     listing_age_trading_days: int,
@@ -417,6 +432,7 @@ def price_limit_status(
     return "none"
 
 
+# 根据全局交易日历计算证券截至当日的上市交易日数。
 def listing_age(
     row_date: date,
     listing_date: date,
@@ -427,6 +443,7 @@ def listing_age(
     return date_position[row_date] - date_position[listing_date] + 1
 
 
+# 根据上市交易日数判断证券上市状态。
 def listing_status(age: int, min_listing_trading_days: int) -> str:
     if age == 0:
         return "not_listed"
@@ -435,6 +452,7 @@ def listing_status(age: int, min_listing_trading_days: int) -> str:
     return "listed_at_least_one_year"
 
 
+# 综合记录完整度和交易标记判定当日交易状态。
 def trading_status_from_presence(
     row_presence: Presence | None,
     normalized_row: dict[str, str] | None,
@@ -460,6 +478,7 @@ def trading_status_from_presence(
     return "unknown"
 
 
+# 综合上市、交易和价格状态生成证券状态分类。
 def security_status(
     *,
     age: int,
@@ -480,6 +499,7 @@ def security_status(
     return "normal"
 
 
+# 为每个交易日和证券生成完整状态台账及分类计数。
 def build_status_ledger(
     *,
     normalized_rows: dict[tuple[date, str], dict[str, str]],
@@ -539,6 +559,7 @@ def build_status_ledger(
     return status_rows, security_counts, trading_counts, price_limit_counts
 
 
+# 筛选满足上市年限要求的完整日行情并附加状态字段。
 def build_clean_daily_rows(
     *,
     normalized_rows: dict[tuple[date, str], dict[str, str]],
@@ -592,6 +613,7 @@ def build_clean_daily_rows(
     return clean_rows, dropped, security_counts
 
 
+# 按指定字段顺序将记录写入 CSV 文件。
 def write_csv(
     output_path: Path,
     fields: list[str],
@@ -609,10 +631,12 @@ def write_csv(
         writer.writerows(rows)
 
 
+# 将计数器按键排序后转换为普通字典。
 def counter_as_dict(counter: Counter) -> dict[str, int]:
     return {str(key): int(counter[key]) for key in sorted(counter)}
 
 
+# 执行成分股与日行情清洗、状态生成和报告输出。
 def main() -> int:
     args = parse_args()
     if args.min_listing_trading_days < 1:

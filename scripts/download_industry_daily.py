@@ -24,6 +24,7 @@ FIELDS = (
 )
 
 
+# 解析行情下载的日期范围和输出文件路径。
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Download daily data for the J66 monetary and financial services industry."
@@ -43,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# 读取查询结果中的全部记录并转换为 DataFrame。
 def query_all_rows(result: object) -> pd.DataFrame:
     rows: list[list[str]] = []
     while result.next():
@@ -50,6 +52,7 @@ def query_all_rows(result: object) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=result.fields)
 
 
+# 查询并筛选指定行业的当前成分股。
 def get_constituents() -> pd.DataFrame:
     result = bs.query_stock_industry()
     if result.error_code != "0":
@@ -77,6 +80,7 @@ def get_constituents() -> pd.DataFrame:
     ].sort_values("code")
 
 
+# 查询单只证券的日行情，并在失败时按次数重试。
 def query_daily_data(
     code: str, start_date: str, end_date: str, retries: int = 3
 ) -> pd.DataFrame:
@@ -98,6 +102,7 @@ def query_daily_data(
     )
 
 
+# 转换行情数值列并补齐行业和数据来源信息。
 def normalize_daily_data(
     daily_df: pd.DataFrame, constituents: pd.DataFrame
 ) -> pd.DataFrame:
@@ -153,6 +158,7 @@ def normalize_daily_data(
     ].sort_values(["date", "code"])
 
 
+# 登录数据源，下载成分股及其日行情并保存结果和元数据。
 def main() -> int:
     args = parse_args()
     if args.start_date > args.end_date:

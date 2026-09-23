@@ -27,6 +27,7 @@ DEFAULT_RATIOS = {
 }
 
 
+# 解析输入文件、输出目录和各数据集的划分比例。
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -46,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# 校验各划分比例均为正数且总和恰好为一。
 def validate_ratios(args: argparse.Namespace) -> dict[str, Decimal]:
     ratios = {
         split_name: getattr(args, f"{split_name}_ratio")
@@ -61,6 +63,7 @@ def validate_ratios(args: argparse.Namespace) -> dict[str, Decimal]:
     return ratios
 
 
+# 使用最大余数法将交易日总数分配到各数据集。
 def allocate_date_counts(
     total_dates: int,
     ratios: dict[str, Decimal],
@@ -87,6 +90,7 @@ def allocate_date_counts(
     return counts
 
 
+# 读取 CSV 并按交易日期归集记录。
 def load_rows(
     input_path: Path,
 ) -> tuple[list[str], dict[str, list[dict[str, str]]]]:
@@ -122,6 +126,7 @@ def load_rows(
     return fields, rows_by_date
 
 
+# 优先返回项目内的相对路径，否则返回解析后的绝对路径。
 def relative_or_absolute(path: Path) -> str:
     resolved = path.resolve()
     try:
@@ -130,6 +135,7 @@ def relative_or_absolute(path: Path) -> str:
         return str(resolved)
 
 
+# 按日期顺序将指定数据集的记录写入 CSV 并返回行数。
 def write_split(
     output_path: Path,
     fields: list[str],
@@ -153,6 +159,7 @@ def write_split(
     return row_count
 
 
+# 汇总划分比例、日期范围、行数和使用说明。
 def build_report(
     *,
     input_path: Path,
@@ -190,6 +197,7 @@ def build_report(
     }
 
 
+# 按交易日期顺序生成各数据集、划分报告并打印摘要。
 def main() -> int:
     args = parse_args()
     ratios = validate_ratios(args)

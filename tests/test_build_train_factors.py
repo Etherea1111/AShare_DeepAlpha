@@ -16,6 +16,7 @@ from build_train_factors import (  # noqa: E402
 )
 
 
+# 构造用于因子与标签测试的模拟日行情。
 def make_bar(day: date, index: int, multiplier: float = 1.0) -> Bar:
     close = (10.0 + index * 0.1) * multiplier
     return Bar(
@@ -32,6 +33,7 @@ def make_bar(day: date, index: int, multiplier: float = 1.0) -> Bar:
 
 
 class FactorLeakageTests(unittest.TestCase):
+    # 验证未来行情变化不会影响当前时点的因子值。
     def test_future_bars_cannot_change_past_factors(self) -> None:
         start = date(2020, 1, 1)
         bars = [make_bar(start + timedelta(days=i), i) for i in range(90)]
@@ -50,6 +52,7 @@ class FactorLeakageTests(unittest.TestCase):
         self.assertIsNotNone(original)
         self.assertEqual(original, after_future_change)
 
+    # 验证前瞻标签只使用训练交易日内同一证券的目标记录。
     def test_labels_use_exact_future_training_dates_only(self) -> None:
         start = date(2020, 1, 1)
         dates = [start + timedelta(days=i) for i in range(100)]

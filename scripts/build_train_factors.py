@@ -69,6 +69,7 @@ class Bar:
     turnover: float
 
 
+# 解析命令行参数并返回因子构建配置。
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -88,6 +89,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+# 将 ISO 日期字符串校验并转换为日期对象。
 def parse_day(value: str, context: str) -> date:
     try:
         parsed = date.fromisoformat(value)
@@ -98,6 +100,7 @@ def parse_day(value: str, context: str) -> date:
     return parsed
 
 
+# 将字段文本转换为有限浮点数，并在无效时提供上下文。
 def parse_number(value: str, field: str, context: str) -> float:
     try:
         number = float(value.replace(",", "").strip())
@@ -108,6 +111,7 @@ def parse_number(value: str, field: str, context: str) -> float:
     return number
 
 
+# 读取训练集，校验记录并按交易日和证券代码建立索引。
 def read_training(
     input_path: Path,
 ) -> tuple[list[str], list[dict[str, str]], list[date], dict[date, dict[str, dict[str, str]]]]:
@@ -143,6 +147,7 @@ def read_training(
     return list(fields), rows, dates, rows_by_date
 
 
+# 读取训练截止日前的可交易历史行情并汇总数据质量信息。
 def read_history(
     input_path: Path,
     train_end: date,
@@ -225,10 +230,12 @@ def read_history(
     return histories, result
 
 
+# 计算数值序列的算术平均值。
 def mean(values: list[float]) -> float:
     return statistics.fmean(values)
 
 
+# 计算指定位置结束的滚动窗口均值。
 def rolling_mean(values: list[float], end: int, window: int) -> float | None:
     start = end - window + 1
     if start < 0:
@@ -236,12 +243,14 @@ def rolling_mean(values: list[float], end: int, window: int) -> float | None:
     return mean(values[start : end + 1])
 
 
+# 计算两个数值之比减一，分母为零时返回空值。
 def ratio(numerator: float, denominator: float) -> float | None:
     if denominator == 0:
         return None
     return numerator / denominator - 1.0
 
 
+# 根据最近窗口的收益率计算相对强弱指标。
 def rsi(returns: list[float], end: int, window: int = 14) -> float | None:
     start = end - window + 1
     if start < 1:
@@ -259,6 +268,7 @@ def rsi(returns: list[float], end: int, window: int = 14) -> float | None:
     return 100.0 - 100.0 / (1.0 + relative_strength)
 
 
+# 使用截至指定位置的历史行情计算价格和成交量因子。
 def calculate_features(bars: list[Bar], index: int) -> dict[str, float] | None:
     if index < 1:
         return None
@@ -361,12 +371,14 @@ def calculate_features(bars: list[Bar], index: int) -> dict[str, float] | None:
     return {name: complete[name] for name in FEATURE_FIELDS}
 
 
+# 将有限浮点数格式化为适合写入 CSV 的字符串。
 def format_number(value: float) -> str:
     if not math.isfinite(value):
         raise ValueError(f"Cannot serialize non-finite value: {value!r}")
     return format(value, ".12g")
 
 
+# 生成包含历史因子和训练区间前瞻标签的数据集及审计结果。
 def build_dataset(
     *,
     source_fields: list[str],
@@ -509,6 +521,7 @@ def build_dataset(
     return output_fields, output_rows, drops, audit
 
 
+# 按指定字段顺序将记录写入 CSV 文件。
 def write_csv(
     output_path: Path,
     fields: list[str],
@@ -526,6 +539,7 @@ def write_csv(
         writer.writerows(rows)
 
 
+# 返回各个因子及前瞻收益标签的定义说明。
 def factor_definitions() -> dict[str, str]:
     return {
         "ret_1": "One previous valid stock observation close-to-close return.",
@@ -561,6 +575,7 @@ def factor_definitions() -> dict[str, str]:
     }
 
 
+# 执行训练数据、历史行情、因子标签和报告的完整构建流程。
 def main() -> int:
     args = parse_args()
     source_fields, training_rows, trading_dates, rows_by_date = read_training(
