@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import calendar
 import csv
 import json
 import math
+import re
 import statistics
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -22,7 +24,7 @@ DEFAULT_HISTORY_INPUT = PROJECT_ROOT / "data/j66_money_finance_daily_2018_2024.c
 DEFAULT_OUTPUT = PROJECT_ROOT / "data/processed/train_factor_labels.csv"
 DEFAULT_REPORT = PROJECT_ROOT / "data/processed/train_factor_label_report.json"
 LABEL_HORIZONS = (5, 20)
-FEATURE_FIELDS = [
+LOCAL_FEATURE_FIELDS = [
     "ret_1",
     "mom_5",
     "mom_20",
@@ -41,6 +43,13 @@ FEATURE_FIELDS = [
     "amihud_20",
     "rsi_14",
 ]
+CONTEXT_FEATURE_FIELDS = [
+    "market_return_1",
+    "market_breadth_up",
+    "relative_return_1",
+    "cross_sectional_rank_return_1",
+]
+FEATURE_FIELDS = LOCAL_FEATURE_FIELDS + CONTEXT_FEATURE_FIELDS
 RAW_FIELDS = [
     "date",
     "code",
@@ -54,6 +63,12 @@ RAW_FIELDS = [
     "turn",
     "tradestatus",
 ]
+ISO_DATE_PATTERN = re.compile(
+    r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})$"
+)
+NUMBER_PATTERN = re.compile(
+    r"^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d{1,6})?$"
+)
 
 
 @dataclass(frozen=True)
@@ -91,21 +106,34 @@ def parse_args() -> argparse.Namespace:
 
 # 将 ISO 日期字符串校验并转换为日期对象。
 def parse_day(value: str, context: str) -> date:
-    try:
-        parsed = date.fromisoformat(value)
-    except ValueError as exc:
-        raise ValueError(f"Invalid date {value!r} in {context}") from exc
-    if parsed.isoformat() != value:
+    match = ISO_DATE_PATTERN.fullmatch(value) if isinstance(value, str) else None
+    if not match:
         raise ValueError(f"Date must use YYYY-MM-DD in {context}: {value!r}")
-    return parsed
+    year = int(match.group("year"))
+    month = int(match.group("month"))
+    day = int(match.group("day"))
+    if not 1 <= month <= 12 or not 1 <= day <= calendar.monthrange(year, month)[1]:
+        raise ValueError(f"Invalid date {value!r} in {context}")
+    return date(year, month, day)
+
+
+# 将文本转换为有限浮点数，无法解析时返回空值。
+def parse_number_or_none(value: object) -> float | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.replace(",", "").strip()
+    if not NUMBER_PATTERN.fullmatch(normalized):
+        return None
+    number = float(normalized)
+    return number if math.isfinite(number) else None
 
 
 # 将字段文本转换为有限浮点数，并在无效时提供上下文。
 def parse_number(value: str, field: str, context: str) -> float:
-    try:
-        number = float(value.replace(",", "").strip())
-    except (AttributeError, ValueError) as exc:
-        raise ValueError(f"Invalid {field} in {context}: {value!r}") from exc
+    normalized = value.replace(",", "").strip()
+    if not NUMBER_PATTERN.fullmatch(normalized):
+        raise ValueError(f"Invalid {field} in {context}: {value!r}")
+    number = float(normalized)
     if not math.isfinite(number):
         raise ValueError(f"Non-finite {field} in {context}: {value!r}")
     return number
@@ -178,27 +206,33 @@ def read_history(
             if row["tradestatus"] != "1":
                 counts["non_trading_rows_excluded"] += 1
                 continue
-            try:
-                bar = Bar(
-                    trading_date=trading_date,
-                    open=parse_number(row["open"], "open", f"line {line_number}"),
-                    high=parse_number(row["high"], "high", f"line {line_number}"),
-                    low=parse_number(row["low"], "low", f"line {line_number}"),
-                    close=parse_number(row["close"], "close", f"line {line_number}"),
-                    preclose=parse_number(
-                        row["preclose"], "preclose", f"line {line_number}"
-                    ),
-                    volume=parse_number(
-                        row["volume"], "volume", f"line {line_number}"
-                    ),
-                    amount=parse_number(
-                        row["amount"], "amount", f"line {line_number}"
-                    ),
-                    turnover=parse_number(row["turn"], "turn", f"line {line_number}"),
+            parsed_numbers = {
+                field: parse_number_or_none(row.get(field))
+                for field in (
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "preclose",
+                    "volume",
+                    "amount",
+                    "turn",
                 )
-            except ValueError:
+            }
+            if any(value is None for value in parsed_numbers.values()):
                 counts["incomplete_or_invalid_rows_excluded"] += 1
                 continue
+            bar = Bar(
+                trading_date=trading_date,
+                open=parsed_numbers["open"],
+                high=parsed_numbers["high"],
+                low=parsed_numbers["low"],
+                close=parsed_numbers["close"],
+                preclose=parsed_numbers["preclose"],
+                volume=parsed_numbers["volume"],
+                amount=parsed_numbers["amount"],
+                turnover=parsed_numbers["turn"],
+            )
             histories[code].append(bar)
             counts["usable_rows"] += 1
 
@@ -366,9 +400,52 @@ def calculate_features(bars: list[Bar], index: int) -> dict[str, float] | None:
         for name, value in features.items()
         if value is not None and math.isfinite(value)
     }
-    if len(complete) != len(FEATURE_FIELDS):
+    if len(complete) != len(LOCAL_FEATURE_FIELDS):
         return None
-    return {name: complete[name] for name in FEATURE_FIELDS}
+    return {name: complete[name] for name in LOCAL_FEATURE_FIELDS}
+
+
+# 计算信号日截面的市场收益、上涨广度、相对收益和收益排名。
+def build_daily_context(
+    training_rows: list[dict[str, str]],
+) -> dict[date, dict[str, dict[str, float]]]:
+    returns_by_date: dict[date, list[tuple[str, float]]] = defaultdict(list)
+    for row in training_rows:
+        trading_date = parse_day(row["date"], "training row")
+        if "preclose" not in row:
+            continue
+        close = parse_number(row["close"], "close", f"{trading_date} {row['code']}")
+        preclose = parse_number(
+            row["preclose"],
+            "preclose",
+            f"{trading_date} {row['code']}",
+        )
+        if preclose != 0:
+            returns_by_date[trading_date].append(
+                (row["code"], close / preclose - 1.0)
+            )
+
+    context_by_date: dict[date, dict[str, dict[str, float]]] = {}
+    for trading_date, code_returns in returns_by_date.items():
+        if not code_returns:
+            continue
+        market_return = statistics.fmean(value for _, value in code_returns)
+        breadth = sum(value > 0 for _, value in code_returns) / len(code_returns)
+        ordered = sorted(code_returns, key=lambda item: (item[1], item[0]))
+        ranks = {
+            code: position / max(1, len(ordered) - 1)
+            for position, (code, _) in enumerate(ordered)
+        }
+        context_by_date[trading_date] = {
+            code: {
+                "market_return_1": market_return,
+                "market_breadth_up": breadth,
+                "relative_return_1": value - market_return,
+                "cross_sectional_rank_return_1": ranks[code],
+            }
+            for code, value in code_returns
+        }
+    return context_by_date
 
 
 # 将有限浮点数格式化为适合写入 CSV 的字符串。
@@ -404,6 +481,7 @@ def build_dataset(
     feature_lookback_dates: list[date] = []
     feature_as_of_pairs: list[tuple[date, date]] = []
     label_end_dates: list[date] = []
+    daily_context = build_daily_context(training_rows)
 
     for row in training_rows:
         as_of = parse_day(row["date"], "training row")
@@ -422,6 +500,16 @@ def build_dataset(
         if features is None:
             drops["feature_warmup"] += 1
             continue
+        context = daily_context.get(as_of, {}).get(
+            code,
+            {
+                "market_return_1": 0.0,
+                "market_breadth_up": 0.5,
+                "relative_return_1": 0.0,
+                "cross_sectional_rank_return_1": 0.5,
+            },
+        )
+        features.update(context)
         feature_source_dates.append(dates[index])
         feature_as_of_dates.append(as_of)
         feature_lookback_dates.append(dates[max(0, index - 60)])

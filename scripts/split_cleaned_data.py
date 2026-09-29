@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import csv
 import json
+import re
 from collections import defaultdict
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,9 @@ DEFAULT_RATIOS = {
     "test": Decimal("0.10"),
     "final_oos": Decimal("0.10"),
 }
+ISO_DATE_PATTERN = re.compile(
+    r"^(?P<year>\d{4})-(?P<month>\d{2})-(?P<day>\d{2})$"
+)
 
 
 # 解析输入文件、输出目录和各数据集的划分比例。
@@ -109,15 +114,21 @@ def load_rows(
                     f"Malformed CSV row at line {row_number}: field count mismatch."
                 )
             raw_date = row["date"].strip()
-            try:
-                parsed_date = date.fromisoformat(raw_date)
-            except ValueError as exc:
+            match = ISO_DATE_PATTERN.fullmatch(raw_date)
+            if not match:
                 raise ValueError(
                     f"Invalid ISO date at line {row_number}: {raw_date!r}"
-                ) from exc
-            if parsed_date.isoformat() != raw_date:
+                )
+            year = int(match.group("year"))
+            month = int(match.group("month"))
+            day = int(match.group("day"))
+            if (
+                not 1 <= year <= 9999
+                or not 1 <= month <= 12
+                or not 1 <= day <= calendar.monthrange(year, month)[1]
+            ):
                 raise ValueError(
-                    f"Date at line {row_number} is not YYYY-MM-DD: {raw_date!r}"
+                    f"Invalid ISO date at line {row_number}: {raw_date!r}"
                 )
             rows_by_date[raw_date].append(row)
 
@@ -129,10 +140,9 @@ def load_rows(
 # 优先返回项目内的相对路径，否则返回解析后的绝对路径。
 def relative_or_absolute(path: Path) -> str:
     resolved = path.resolve()
-    try:
+    if resolved.is_relative_to(PROJECT_ROOT):
         return resolved.relative_to(PROJECT_ROOT).as_posix()
-    except ValueError:
-        return str(resolved)
+    return str(resolved)
 
 
 # 按日期顺序将指定数据集的记录写入 CSV 并返回行数。
@@ -246,7 +256,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except (InvalidOperation, OSError, ValueError) as exc:
-        raise SystemExit(f"Error: {exc}") from exc
+    raise SystemExit(main())

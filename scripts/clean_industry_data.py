@@ -11,13 +11,14 @@ states with ordinary missing data.
 from __future__ import annotations
 
 import argparse
+import calendar
 import csv
 import json
 import re
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date, datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from datetime import date
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,21 @@ CONSTITUENT_FIELDS = [
 
 MISSING_VALUES = {"", "na", "n/a", "nan", "null", "nat"}
 CODE_PATTERN = re.compile(r"^(sh|sz|bj)\.?(?P<number>\d{6})$", re.IGNORECASE)
+DATE_PATTERNS = (
+    re.compile(
+        r"^(?P<year>\d{4})-(?P<month>\d{1,2})-(?P<day>\d{1,2})$"
+    ),
+    re.compile(
+        r"^(?P<year>\d{4})/(?P<month>\d{1,2})/(?P<day>\d{1,2})$"
+    ),
+    re.compile(
+        r"^(?P<year>\d{4})\.(?P<month>\d{1,2})\.(?P<day>\d{1,2})$"
+    ),
+    re.compile(r"^(?P<year>\d{4})(?P<month>\d{2})(?P<day>\d{2})$"),
+)
+DECIMAL_PATTERN = re.compile(
+    r"^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d{1,6})?$"
+)
 PRICE_TICK = Decimal("0.01")
 PRICE_TOLERANCE = Decimal("0.0001")
 
@@ -138,41 +154,116 @@ def normalize_text(value: str) -> str:
     return " ".join(value.strip().split())
 
 
+# 将支持的日期格式统一转换为日期对象，无法解析时返回空值。
+def normalize_date_or_none(value: object) -> date | None:
+    if not isinstance(value, str):
+        return None
+    raw_value = normalize_text(value)
+    for pattern in DATE_PATTERNS:
+        match = pattern.fullmatch(raw_value)
+        if not match:
+            continue
+        year = int(match.group("year"))
+        month = int(match.group("month"))
+        day = int(match.group("day"))
+        if not 1 <= year <= 9999 or not 1 <= month <= 12:
+            return None
+        if not 1 <= day <= calendar.monthrange(year, month)[1]:
+            return None
+        return date(year, month, day)
+    return None
+
+
 # 将支持的日期格式统一转换为日期对象。
 def normalize_date(value: str) -> date:
-    raw_value = normalize_text(value)
-    for date_format in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y%m%d"):
-        try:
-            return datetime.strptime(raw_value, date_format).date()
-        except ValueError:
-            continue
-    raise ValueError(f"Invalid date: {value!r}")
+    normalized = normalize_date_or_none(value)
+    if normalized is None:
+        raise ValueError(f"Invalid date: {value!r}")
+    return normalized
+
+
+# 校验证券代码并统一为交易所前缀加代码的格式，无法解析时返回空值。
+def normalize_code_or_none(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    match = CODE_PATTERN.fullmatch(normalize_text(value))
+    if not match:
+        return None
+    return f"{match.group(1).lower()}.{match.group('number')}"
 
 
 # 校验证券代码并统一为交易所前缀加代码的格式。
 def normalize_code(value: str) -> str:
-    match = CODE_PATTERN.fullmatch(normalize_text(value))
-    if not match:
+    normalized = normalize_code_or_none(value)
+    if normalized is None:
         raise ValueError(f"Invalid stock code: {value!r}")
-    return f"{match.group(1).lower()}.{match.group('number')}"
+    return normalized
+
+
+# 将有限十进制数值转换为 Decimal，无法解析时返回空值。
+def parse_decimal_or_none(value: object) -> Decimal | None:
+    if not isinstance(value, str):
+        return None
+    raw_value = normalize_text(value).replace(",", "")
+    if len(raw_value) > 1000 or not DECIMAL_PATTERN.fullmatch(raw_value):
+        return None
+    number = Decimal(raw_value)
+    if abs(number.as_tuple().exponent) > 1000 or abs(number.adjusted()) > 1000:
+        return None
+    return number if number.is_finite() else None
 
 
 # 解析并校验有限十进制数值。
 def parse_decimal(value: str) -> Decimal:
-    try:
-        number = Decimal(normalize_text(value).replace(",", ""))
-    except InvalidOperation as exc:
-        raise ValueError(f"Invalid number: {value!r}") from exc
+    raw_value = normalize_text(value).replace(",", "")
+    if not DECIMAL_PATTERN.fullmatch(raw_value):
+        raise ValueError(f"Invalid number: {value!r}")
+    number = Decimal(raw_value)
     if not number.is_finite():
+        raise ValueError(f"Non-finite number: {value!r}")
+    if abs(number.as_tuple().exponent) > 1000 or abs(number.adjusted()) > 1000:
         raise ValueError(f"Non-finite number: {value!r}")
     return number
 
 
+# 按指定小数位数规范化有限十进制数值，无法解析时返回空值。
+def normalize_decimal_or_none(value: object, places: int) -> str | None:
+    number = parse_decimal_or_none(value)
+    if number is None:
+        return None
+    scale = Decimal(1).scaleb(-places)
+    with localcontext() as context:
+        context.prec = max(
+            28,
+            len(number.as_tuple().digits) + places + 2,
+            number.adjusted() + places + 2,
+        )
+        rounded = number.quantize(scale, rounding=ROUND_HALF_UP)
+    return format(rounded, f".{places}f")
+
+
 # 按指定小数位数和四舍五入规则规范化数值文本。
 def normalize_decimal(value: str, places: int) -> str:
+    number = parse_decimal(value)
     scale = Decimal(1).scaleb(-places)
-    number = parse_decimal(value).quantize(scale, rounding=ROUND_HALF_UP)
-    return format(number, f".{places}f")
+    with localcontext() as context:
+        context.prec = max(
+            28,
+            len(number.as_tuple().digits) + places + 2,
+            number.adjusted() + places + 2,
+        )
+        return format(
+            number.quantize(scale, rounding=ROUND_HALF_UP),
+            f".{places}f",
+        )
+
+
+# 将数值文本校验并转换为整数，无法解析时返回空值。
+def normalize_integer_or_none(value: object) -> int | None:
+    number = parse_decimal_or_none(value)
+    if number is None or number != number.to_integral_value():
+        return None
+    return int(number)
 
 
 # 将数值文本校验并转换为整数。
@@ -184,27 +275,57 @@ def normalize_integer(value: str) -> int:
 
 
 # 规范化单条日行情记录中的日期、代码和数值字段。
-def normalize_daily_row(row: dict[str, str]) -> dict[str, str]:
-    normalized_date = normalize_date(row["date"])
-    normalized_code = normalize_code(row["code"])
+def normalize_daily_row(row: dict[str, str]) -> dict[str, str] | None:
+    normalized_date = normalize_date_or_none(row.get("date"))
+    normalized_code = normalize_code_or_none(row.get("code"))
+    if normalized_date is None or normalized_code is None:
+        return None
+
+    decimal_places = {
+        "open": 4,
+        "high": 4,
+        "low": 4,
+        "close": 4,
+        "preclose": 4,
+        "amount": 2,
+        "turn": 6,
+        "pctChg": 6,
+    }
+    normalized_decimals = {
+        field: normalize_decimal_or_none(row.get(field), places)
+        for field, places in decimal_places.items()
+    }
+    normalized_integers = {
+        field: normalize_integer_or_none(row.get(field))
+        for field in ("volume", "tradestatus", "isST", "adjustflag")
+    }
+    if (
+        any(value is None for value in normalized_decimals.values())
+        or any(value is None for value in normalized_integers.values())
+        or any(
+            not isinstance(row.get(field), str)
+            for field in (
+                "code_name",
+                "industry_code",
+                "industry_name",
+                "adjustment",
+                "data_source",
+            )
+        )
+    ):
+        return None
+
     normalized = {
         "date": normalized_date.isoformat(),
         "code": normalized_code,
         "code_name": normalize_text(row["code_name"]),
         "industry_code": normalize_text(row["industry_code"]).upper(),
         "industry_name": normalize_text(row["industry_name"]),
-        "open": normalize_decimal(row["open"], 4),
-        "high": normalize_decimal(row["high"], 4),
-        "low": normalize_decimal(row["low"], 4),
-        "close": normalize_decimal(row["close"], 4),
-        "preclose": normalize_decimal(row["preclose"], 4),
-        "volume": str(normalize_integer(row["volume"])),
-        "amount": normalize_decimal(row["amount"], 2),
-        "turn": normalize_decimal(row["turn"], 6),
-        "pctChg": normalize_decimal(row["pctChg"], 6),
-        "tradestatus": str(normalize_integer(row["tradestatus"])),
-        "isST": str(normalize_integer(row["isST"])),
-        "adjustflag": str(normalize_integer(row["adjustflag"])),
+        **{field: value for field, value in normalized_decimals.items()},
+        **{
+            field: str(value)
+            for field, value in normalized_integers.items()
+        },
         "adjustment": normalize_text(row["adjustment"]).lower(),
         "data_source": normalize_text(row["data_source"]),
     }
@@ -212,14 +333,28 @@ def normalize_daily_row(row: dict[str, str]) -> dict[str, str]:
 
 
 # 规范化单条行业成分股记录。
-def normalize_constituent_row(row: dict[str, str]) -> dict[str, str]:
+def normalize_constituent_row(row: dict[str, str]) -> dict[str, str] | None:
+    normalized_code = normalize_code_or_none(row.get("code"))
+    normalized_date = normalize_date_or_none(row.get("updateDate"))
+    if normalized_code is None or normalized_date is None:
+        return None
+    if any(
+        not isinstance(row.get(field), str)
+        for field in (
+            "code_name",
+            "industry_code",
+            "industry_name",
+            "classification",
+        )
+    ):
+        return None
     return {
-        "code": normalize_code(row["code"]),
+        "code": normalized_code,
         "code_name": normalize_text(row["code_name"]),
         "industry_code": normalize_text(row["industry_code"]).upper(),
         "industry_name": normalize_text(row["industry_name"]),
         "classification": normalize_text(row["classification"]),
-        "updateDate": normalize_date(row["updateDate"]).isoformat(),
+        "updateDate": normalized_date.isoformat(),
     }
 
 
@@ -244,9 +379,8 @@ def read_constituents(
             if any(is_missing(row.get(field)) for field in CONSTITUENT_FIELDS):
                 dropped["missing_value"] += 1
                 continue
-            try:
-                normalized = normalize_constituent_row(row)
-            except ValueError:
+            normalized = normalize_constituent_row(row)
+            if normalized is None:
                 dropped["invalid_format"] += 1
                 continue
             if normalized["code"] in seen_codes:
@@ -294,10 +428,9 @@ def read_daily(
 
         for row_number, row in enumerate(reader, start=2):
             total_rows += 1
-            try:
-                row_date = normalize_date(row["date"])
-                code = normalize_code(row["code"])
-            except ValueError:
+            row_date = normalize_date_or_none(row.get("date"))
+            code = normalize_code_or_none(row.get("code"))
+            if row_date is None or code is None:
                 dropped["invalid_identity"] += 1
                 continue
 
@@ -315,10 +448,7 @@ def read_daily(
 
             raw_tradestatus: int | None = None
             if not is_missing(row.get("tradestatus")):
-                try:
-                    raw_tradestatus = normalize_integer(row["tradestatus"])
-                except ValueError:
-                    raw_tradestatus = None
+                raw_tradestatus = normalize_integer_or_none(row.get("tradestatus"))
 
             if any(is_missing(row.get(field)) for field in DAILY_FIELDS):
                 presence[key] = Presence(
@@ -330,9 +460,8 @@ def read_daily(
                 dropped["missing_value"] += 1
                 continue
 
-            try:
-                normalized = normalize_daily_row(row)
-            except ValueError:
+            normalized = normalize_daily_row(row)
+            if normalized is None:
                 presence[key] = Presence(
                     row_number=row_number,
                     code_name=code_names.get(code, ""),
@@ -342,8 +471,8 @@ def read_daily(
                 dropped["invalid_format"] += 1
                 continue
 
-            normalized_date = normalize_date(normalized["date"])
-            normalized_code = normalized["code"]
+            normalized_date = row_date
+            normalized_code = code
             presence[key] = Presence(
                 row_number=row_number,
                 code_name=normalized["code_name"],

@@ -11,7 +11,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from build_train_factors import (  # noqa: E402
     Bar,
+    FEATURE_FIELDS,
     build_dataset,
+    build_daily_context,
     calculate_features,
 )
 
@@ -82,6 +84,43 @@ class FactorLeakageTests(unittest.TestCase):
         self.assertEqual(output[0]["label_5d_end_date"], dates[65].isoformat())
         self.assertEqual(output[0]["label_20d_end_date"], dates[80].isoformat())
         self.assertEqual(output[-1]["label_20d_end_date"], dates[-1].isoformat())
+
+    # 验证截面上下文特征只由当日可见行情计算。
+    def test_daily_context_features_are_cross_sectional(self) -> None:
+        rows = [
+            {
+                "date": "2020-01-01",
+                "code": "a",
+                "close": "11",
+                "preclose": "10",
+            },
+            {
+                "date": "2020-01-01",
+                "code": "b",
+                "close": "9",
+                "preclose": "10",
+            },
+        ]
+        context = build_daily_context(rows)
+
+        self.assertEqual(
+            set(context[date(2020, 1, 1)]["a"]),
+            {
+                "market_return_1",
+                "market_breadth_up",
+                "relative_return_1",
+                "cross_sectional_rank_return_1",
+            },
+        )
+        self.assertAlmostEqual(
+            context[date(2020, 1, 1)]["a"]["market_return_1"],
+            0.0,
+        )
+        self.assertEqual(
+            context[date(2020, 1, 1)]["a"]["cross_sectional_rank_return_1"],
+            1.0,
+        )
+        self.assertEqual(len(FEATURE_FIELDS), 21)
 
 
 if __name__ == "__main__":
