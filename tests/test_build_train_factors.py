@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from build_train_factors import (  # noqa: E402
     Bar,
     FEATURE_FIELDS,
+    apply_total_return_adjustment,
     build_dataset,
     build_daily_context,
     calculate_features,
@@ -27,6 +28,7 @@ def make_bar(day: date, index: int, multiplier: float = 1.0) -> Bar:
         high=close * 1.01,
         low=close * 0.99,
         close=close,
+        adjusted_close=close,
         preclose=close / 1.001,
         volume=1000.0 + index,
         amount=close * (1000.0 + index),
@@ -35,6 +37,46 @@ def make_bar(day: date, index: int, multiplier: float = 1.0) -> Bar:
 
 
 class FactorLeakageTests(unittest.TestCase):
+    # 验证分红除权日不会在总收益价格序列中形成虚假下跌。
+    def test_total_return_adjustment_removes_dividend_gap(self) -> None:
+        bars = [
+            Bar(
+                trading_date=date(2020, 1, 1),
+                open=10.0,
+                high=10.0,
+                low=10.0,
+                close=10.0,
+                adjusted_close=10.0,
+                preclose=10.0,
+                volume=1000.0,
+                amount=10_000.0,
+                turnover=0.5,
+            ),
+            Bar(
+                trading_date=date(2020, 1, 2),
+                open=9.0,
+                high=9.5,
+                low=9.0,
+                close=9.5,
+                adjusted_close=9.5,
+                preclose=9.0,
+                volume=1000.0,
+                amount=9_500.0,
+                turnover=0.5,
+            ),
+        ]
+
+        adjusted = apply_total_return_adjustment(bars)
+
+        self.assertAlmostEqual(
+            adjusted[1].adjusted_close / adjusted[0].adjusted_close - 1.0,
+            9.5 / 9.0 - 1.0,
+        )
+        self.assertGreater(
+            adjusted[1].adjusted_close / adjusted[0].adjusted_close,
+            bars[1].close / bars[0].close,
+        )
+
     # 验证未来行情变化不会影响当前时点的因子值。
     def test_future_bars_cannot_change_past_factors(self) -> None:
         start = date(2020, 1, 1)

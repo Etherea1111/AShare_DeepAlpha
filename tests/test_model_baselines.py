@@ -5,6 +5,7 @@ import unittest
 import math
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.dont_write_bytecode = True
@@ -106,6 +107,32 @@ class ModelBaselineTests(unittest.TestCase):
         )
 
         self.assertEqual(predictions, [1.0])
+
+    # 验证无 NumPy 时的标准库回退路径与 NumPy 路径结果一致。
+    def test_knn_standard_library_fallback_matches_numpy(self) -> None:
+        train_matrix = [
+            [float(index)] + [0.0] * (len(FEATURE_FIELDS) - 1)
+            for index in range(6)
+        ]
+        train_targets = [float(index) for index in range(6)]
+        query_matrix = [[0.25] + [0.0] * (len(FEATURE_FIELDS) - 1)]
+
+        accelerated = predict_knn(
+            train_matrix,
+            train_targets,
+            query_matrix,
+            n_neighbors=3,
+        )
+        with patch("fit_model_baselines.np", None):
+            fallback = predict_knn(
+                train_matrix,
+                train_targets,
+                query_matrix,
+                n_neighbors=3,
+            )
+
+        self.assertEqual(len(fallback), 1)
+        self.assertAlmostEqual(fallback[0], accelerated[0], places=12)
 
     # 验证时序交叉验证训练标签终点严格早于验证窗口。
     def test_walk_forward_folds_purge_cross_boundary_labels(self) -> None:

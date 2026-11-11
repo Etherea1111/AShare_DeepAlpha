@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import sys
 import tempfile
 import unittest
@@ -157,6 +158,168 @@ class PointInTimePanelTests(unittest.TestCase):
             self.assertEqual(len(output_rows), 2)
             self.assertEqual(output_rows[0]["membership_snapshot_date"], "2020-01-06")
             self.assertEqual(output_rows[1]["membership_effective_date"], "2020-02-03")
+
+    def test_build_panel_drops_members_after_snapshot_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            daily_path = root / "daily.csv"
+            membership_path = root / "membership.csv"
+            output_path = root / "out.csv"
+            report_path = root / "report.json"
+
+            with daily_path.open("w", encoding="utf-8", newline="") as target:
+                writer = csv.DictWriter(
+                    target,
+                    fieldnames=["date", "code", "close"],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2020-01-10", "code": "sh.600000", "close": "10"},
+                        {"date": "2020-01-10", "code": "sh.600015", "close": "8"},
+                        {"date": "2020-01-20", "code": "sh.600000", "close": "11"},
+                        {"date": "2020-01-20", "code": "sh.600015", "close": "9"},
+                    ]
+                )
+
+            with membership_path.open(
+                "w",
+                encoding="utf-8",
+                newline="",
+            ) as target:
+                writer = csv.DictWriter(
+                    target,
+                    fieldnames=[
+                        "snapshot_date",
+                        "effective_date",
+                        "code",
+                        "industry_code",
+                        "source",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {
+                            "snapshot_date": "2020-01-06",
+                            "effective_date": "2020-01-06",
+                            "code": "sh.600000",
+                            "industry_code": "J66",
+                            "source": "fixture",
+                        },
+                        {
+                            "snapshot_date": "2020-01-06",
+                            "effective_date": "2020-01-06",
+                            "code": "sh.600015",
+                            "industry_code": "J66",
+                            "source": "fixture",
+                        },
+                        {
+                            "snapshot_date": "2020-01-13",
+                            "effective_date": "2020-01-13",
+                            "code": "sh.600000",
+                            "industry_code": "J66",
+                            "source": "fixture",
+                        },
+                    ]
+                )
+
+            report = build_panel(
+                daily_path,
+                membership_path,
+                output_path,
+                report_path,
+                "J66",
+            )
+
+            self.assertEqual(
+                report["counts"]["dropped_after_membership_exit"],
+                1,
+            )
+            self.assertEqual(report["membership_event_counts"]["removed"], 1)
+            with output_path.open(encoding="utf-8-sig", newline="") as source:
+                output_rows = list(csv.DictReader(source))
+            self.assertEqual(len(output_rows), 3)
+            self.assertEqual(
+                {row["code"] for row in output_rows if row["date"] == "2020-01-20"},
+                {"sh.600000"},
+            )
+
+    def test_build_panel_uses_metadata_for_empty_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            daily_path = root / "daily.csv"
+            membership_path = root / "membership.csv"
+            output_path = root / "out.csv"
+            report_path = root / "report.json"
+
+            with daily_path.open("w", encoding="utf-8", newline="") as target:
+                writer = csv.DictWriter(
+                    target,
+                    fieldnames=["date", "code", "close"],
+                )
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"date": "2020-01-10", "code": "sh.600000", "close": "10"},
+                        {"date": "2020-01-20", "code": "sh.600000", "close": "11"},
+                    ]
+                )
+
+            with membership_path.open(
+                "w",
+                encoding="utf-8",
+                newline="",
+            ) as target:
+                writer = csv.DictWriter(
+                    target,
+                    fieldnames=[
+                        "snapshot_date",
+                        "effective_date",
+                        "code",
+                        "industry_code",
+                        "source",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "snapshot_date": "2020-01-06",
+                        "effective_date": "2020-01-06",
+                        "code": "sh.600000",
+                        "industry_code": "J66",
+                        "source": "fixture",
+                    }
+                )
+
+            membership_path.with_suffix(".metadata.json").write_text(
+                json.dumps(
+                    {
+                        "snapshots": [
+                            {"snapshot_date": "2020-01-06", "member_count": 1},
+                            {"snapshot_date": "2020-01-13", "member_count": 0},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            report = build_panel(
+                daily_path,
+                membership_path,
+                output_path,
+                report_path,
+                "J66",
+            )
+
+            self.assertEqual(report["membership_snapshot_count"], 2)
+            self.assertEqual(
+                report["counts"]["dropped_after_membership_exit"],
+                1,
+            )
+            with output_path.open(encoding="utf-8-sig", newline="") as source:
+                output_rows = list(csv.DictReader(source))
+            self.assertEqual([row["date"] for row in output_rows], ["2020-01-10"])
 
     def test_load_membership_rejects_future_effective_date(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

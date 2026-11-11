@@ -12,7 +12,7 @@ import math
 import re
 import statistics
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -78,6 +78,7 @@ class Bar:
     high: float
     low: float
     close: float
+    adjusted_close: float
     preclose: float
     volume: float
     amount: float
@@ -175,6 +176,26 @@ def read_training(
     return list(fields), rows, dates, rows_by_date
 
 
+# 用 preclose 构造总收益指数，消除分红送转造成的原始价格跳变。
+def apply_total_return_adjustment(bars: list[Bar]) -> list[Bar]:
+    if not bars:
+        return []
+    ordered = sorted(bars, key=lambda bar: bar.trading_date)
+    adjusted: list[Bar] = []
+    total_return_index = 1.0
+    previous_date: date | None = None
+    for bar in ordered:
+        if previous_date is not None:
+            if bar.preclose <= 0:
+                raise ValueError(
+                    f"Non-positive preclose for {bar.trading_date}"
+                )
+            total_return_index *= bar.close / bar.preclose
+        adjusted.append(replace(bar, adjusted_close=total_return_index))
+        previous_date = bar.trading_date
+    return adjusted
+
+
 # 读取训练截止日前的可交易历史行情并汇总数据质量信息。
 def read_history(
     input_path: Path,
@@ -228,6 +249,7 @@ def read_history(
                 high=parsed_numbers["high"],
                 low=parsed_numbers["low"],
                 close=parsed_numbers["close"],
+                adjusted_close=parsed_numbers["close"],
                 preclose=parsed_numbers["preclose"],
                 volume=parsed_numbers["volume"],
                 amount=parsed_numbers["amount"],
@@ -236,11 +258,16 @@ def read_history(
             histories[code].append(bar)
             counts["usable_rows"] += 1
 
+    corporate_action_event_count = 0
     for code, bars in histories.items():
         bars.sort(key=lambda bar: bar.trading_date)
         dates = [bar.trading_date for bar in bars]
         if len(dates) != len(set(dates)):
             raise ValueError(f"Duplicate usable history date for {code}.")
+        for previous, current in zip(bars, bars[1:]):
+            if previous.close > 0 and abs(current.preclose / previous.close - 1.0) > 1e-6:
+                corporate_action_event_count += 1
+        histories[code] = apply_total_return_adjustment(bars)
     if not histories:
         raise ValueError(f"No usable historical bars found in {input_path}.")
 
@@ -254,6 +281,8 @@ def read_history(
         "rows_after_training_end_excluded": counts[
             "after_training_end_excluded"
         ],
+        "corporate_action_event_count": corporate_action_event_count,
+        "price_adjustment": "Total-return index compounded from close/preclose.",
         "history_start_date": min(
             bar.trading_date for bars in histories.values() for bar in bars
         ).isoformat(),
@@ -307,18 +336,18 @@ def calculate_features(bars: list[Bar], index: int) -> dict[str, float] | None:
     if index < 1:
         return None
     visible_bars = bars[: index + 1]
-    closes = [bar.close for bar in visible_bars]
+    closes = [bar.adjusted_close for bar in visible_bars]
     returns: list[float | None] = [None]
     for previous, current in zip(closes, closes[1:]):
         returns.append(current / previous - 1.0 if previous else None)
 
     current = visible_bars[index]
-    previous_close = visible_bars[index - 1].close
+    previous_close = visible_bars[index - 1].adjusted_close
     features: dict[str, float | None] = {
         "ret_1": returns[index],
-        "mom_5": ratio(current.close, closes[index - 5]) if index >= 5 else None,
-        "mom_20": ratio(current.close, closes[index - 20]) if index >= 20 else None,
-        "mom_60": ratio(current.close, closes[index - 60]) if index >= 60 else None,
+        "mom_5": ratio(current.adjusted_close, closes[index - 5]) if index >= 5 else None,
+        "mom_20": ratio(current.adjusted_close, closes[index - 20]) if index >= 20 else None,
+        "mom_60": ratio(current.adjusted_close, closes[index - 60]) if index >= 60 else None,
         "sma_ratio_5_20": None,
         "sma_ratio_20_60": None,
         "volume_ratio_5_20": None,
@@ -518,20 +547,18 @@ def build_dataset(
         position = date_positions[as_of]
         label_values: dict[int, tuple[float, date]] = {}
         label_failure: str | None = None
-        source_close = parse_number(row["close"], "close", f"{as_of} {code}")
+        source_close = bars[index].adjusted_close
         for horizon in LABEL_HORIZONS:
             target_position = position + horizon
             if target_position >= len(trading_dates):
                 label_failure = "label_horizon_outside_training"
                 break
             target_date = trading_dates[target_position]
-            target_row = training_rows_by_date.get(target_date, {}).get(code)
-            if target_row is None:
+            target_index = bisect.bisect_left(dates, target_date)
+            if target_index >= len(dates) or dates[target_index] != target_date:
                 label_failure = "label_target_missing"
                 break
-            target_close = parse_number(
-                target_row["close"], "close", f"{target_date} {code}"
-            )
+            target_close = bars[target_index].adjusted_close
             if source_close == 0:
                 label_failure = "invalid_label_base_price"
                 break
@@ -630,15 +657,17 @@ def write_csv(
 # 返回各个因子及前瞻收益标签的定义说明。
 def factor_definitions() -> dict[str, str]:
     return {
-        "ret_1": "One previous valid stock observation close-to-close return.",
+        "ret_1": (
+            "One previous valid stock observation total-return adjusted return."
+        ),
         "mom_5/mom_20/mom_60": (
-            "Close-to-close return over 5/20/60 previous valid stock observations."
+            "Total-return adjusted return over 5/20/60 previous valid observations."
         ),
         "volatility_5/20/60": (
-            "Population standard deviation of the latest 5/20/60 close returns."
+            "Population standard deviation of the latest 5/20/60 adjusted returns."
         ),
         "sma_ratio_5_20/sma_ratio_20_60": (
-            "Ratio of trailing close moving averages minus one."
+            "Ratio of trailing adjusted-close moving averages minus one."
         ),
         "volume_ratio_5_20": (
             "Trailing 5-observation mean volume divided by 20-observation mean, minus one."
@@ -657,8 +686,8 @@ def factor_definitions() -> dict[str, str]:
         ),
         "rsi_14": "Simple-average RSI over the latest 14 close-return observations.",
         "fwd_return_5d/fwd_return_20d": (
-            "Same-security close-to-close return to exactly 5/20 later training "
-            "market dates; rows without an in-training endpoint are excluded."
+            "Same-security total-return adjusted return to exactly 5/20 later "
+            "training market dates; rows without an in-training endpoint are excluded."
         ),
     }
 
@@ -702,7 +731,10 @@ def main() -> int:
         },
         "factor_definitions": factor_definitions(),
         "label_definition": {
-            "basis": "Unadjusted close-to-close simple return.",
+            "basis": (
+                "Total-return index compounded from close/preclose, so dividends "
+                "and splits do not create artificial raw-price gaps."
+            ),
             "horizons": "5 and 20 subsequent dates in the training split trading calendar.",
             "entry_execution": (
                 "Research label only; it is not an executable return model. "
@@ -710,7 +742,7 @@ def main() -> int:
             ),
         },
         "data_limitations": [
-            "The raw source uses adjustflag=3 (unadjusted); corporate actions can distort both factors and labels.",
+            "The raw source uses adjustflag=3 (unadjusted), but factors and labels use a total-return index derived from close/preclose; raw prices remain for execution simulation.",
             "Factor windows count valid per-security observations and can span suspension or missing-data gaps.",
             "Training inputs have already filtered securities by the project listing-age rule.",
             "No cross-sectional scaling or imputation is applied; fit any learned transform on training data only.",

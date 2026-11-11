@@ -925,16 +925,17 @@ def select_model_configs(
             )
             key = f"elastic_net_alpha_{alpha:g}_l1_{l1_ratio:g}"
             candidates[key] = predict_linear(test_matrix, coefficients, train_target_params)
-        if np is not None:
-            for n_neighbors in KNN_NEIGHBOR_COUNTS:
-                key = f"knn_k_{n_neighbors}"
-                candidates[key] = predict_knn_regression(
-                    train_matrix,
-                    train_targets,
-                    test_matrix,
-                    n_neighbors,
-                    train_target_params,
-                )
+        # Keep KNN in model selection even without NumPy. The fallback is
+        # slower, but silently dropping the family makes reports non-reproducible.
+        for n_neighbors in KNN_NEIGHBOR_COUNTS:
+            key = f"knn_k_{n_neighbors}"
+            candidates[key] = predict_knn_regression(
+                train_matrix,
+                train_targets,
+                test_matrix,
+                n_neighbors,
+                train_target_params,
+            )
 
         direction_labels = [int(row["target"] > 0.0) for row in train_rows]
         direction_candidates: dict[str, list[float]] = {}
@@ -1429,10 +1430,14 @@ def main() -> int:
         },
         "method": {
             "features": FEATURE_FIELDS,
+            "price_adjustment": (
+                "Factors use a total-return index compounded from close/preclose; "
+                "raw prices remain the execution basis."
+            ),
             "target": (
-                "5/20-session raw close-to-close return minus same-signal-date "
+                "5/20-session total-return adjusted return minus same-signal-date "
                 "sample mean; used as a cross-sectional learning target, not an "
-                "investable benchmark return."
+                "executable portfolio return."
             ),
             "feature_preprocessing": (
                 "Per-feature 1st/99th percentile clipping, median imputation, "
@@ -1486,7 +1491,7 @@ def main() -> int:
         },
         "limitations": [
             "Validation covers only 2023-03-20 through 2023-10-24 and one narrow J66 industry universe.",
-            "Labels use unadjusted close-to-close prices and do not represent executable returns.",
+            "Labels use a total-return index derived from close/preclose and do not represent executable portfolio returns.",
             "The data uses a current industry constituent snapshot and may contain survivorship bias.",
             "No trading costs, turnover limits, market impact, or A-share execution constraints are modeled.",
             "The validation period is small and model comparisons are exploratory; test and final OOS remain untouched.",

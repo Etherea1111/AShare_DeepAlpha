@@ -222,12 +222,21 @@ def main() -> int:
             f"{login_result.error_msg}"
         )
     try:
+        snapshot_counts: list[dict[str, Any]] = []
+
+        def query_and_record(snapshot_date: str) -> list[dict[str, str]]:
+            snapshot_rows = query_snapshot(snapshot_date, client=bs)
+            snapshot_counts.append(
+                {
+                    "snapshot_date": snapshot_date,
+                    "member_count": len(snapshot_rows),
+                }
+            )
+            return snapshot_rows
+
         rows = download_snapshots(
             args,
-            query=lambda snapshot_date: query_snapshot(
-                snapshot_date,
-                client=bs,
-            ),
+            query=query_and_record,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("w", encoding="utf-8-sig", newline="") as target:
@@ -244,8 +253,9 @@ def main() -> int:
             "start_date": args.start_date,
             "end_date": args.end_date,
             "snapshot_frequency": "weekly_monday",
-            "snapshot_count": len(set(row["snapshot_date"] for row in rows)),
+            "snapshot_count": len(snapshot_counts),
             "row_count": len(rows),
+            "snapshots": snapshot_counts,
             "output": str(args.output),
         }
         args.output.with_suffix(".metadata.json").write_text(

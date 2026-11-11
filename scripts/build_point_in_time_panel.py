@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import bisect
 import csv
 import json
 from collections import Counter, defaultdict
@@ -34,6 +33,7 @@ MEMBERSHIP_OUTPUT_FIELDS = [
     "membership_asof_date",
     "membership_snapshot_date",
     "membership_effective_date",
+    "membership_event_type",
     "membership_source",
     "point_in_time_member",
 ]
@@ -85,17 +85,37 @@ def parse_iso_date(value: object, context: str) -> date:
     return parsed
 
 
+# 读取下载脚本生成的快照清单，包括没有任何成员的快照日期。
+def load_snapshot_dates(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    snapshots = metadata.get("snapshots", [])
+    dates: list[str] = []
+    for item in snapshots:
+        if isinstance(item, dict):
+            value = item.get("snapshot_date")
+        else:
+            value = item
+        if value:
+            parse_iso_date(value, f"{path} snapshot metadata")
+            dates.append(value)
+    return sorted(set(dates))
+
+
 # 将点时成员快照索引为 code -> 按生效日期排序的记录。
 def load_membership(
     path: Path,
     industry_code: str,
+    snapshot_metadata_path: Path | None = None,
 ) -> dict[str, list[dict[str, str]]]:
     fields, rows = read_csv(path)
     missing = MEMBERSHIP_FIELDS - set(fields)
     if missing:
         raise ValueError(f"{path} is missing membership fields: {sorted(missing)}")
     membership: dict[str, list[dict[str, str]]] = defaultdict(list)
-    seen: set[tuple[str, str]] = set()
+    snapshot_members: dict[str, set[str]] = defaultdict(set)
+    seen: set[tuple[str, str, str]] = set()
     for row in rows:
         if row["industry_code"] != industry_code:
             continue
@@ -115,7 +135,7 @@ def load_membership(
                 "Membership effective_date cannot be after snapshot_date: "
                 f"{code} {effective_date} {snapshot_date}"
             )
-        key = (code, row["effective_date"])
+        key = (code, row["effective_date"], "member")
         if key in seen:
             raise ValueError(f"Duplicate membership snapshot: {key}")
         seen.add(key)
@@ -123,10 +143,48 @@ def load_membership(
         normalized["code"] = code
         normalized["_snapshot_date"] = snapshot_date.isoformat()
         normalized["_effective_date"] = effective_date.isoformat()
+        normalized["_event_type"] = "member"
         membership[code].append(normalized)
+        snapshot_members[normalized["_snapshot_date"]].add(code)
+
+    metadata_dates = (
+        load_snapshot_dates(snapshot_metadata_path)
+        if snapshot_metadata_path
+        else []
+    )
+    for snapshot_date in metadata_dates:
+        snapshot_members.setdefault(snapshot_date, set())
+
+    ordered_snapshots = sorted(snapshot_members)
+    for previous_date, current_date in zip(
+        ordered_snapshots,
+        ordered_snapshots[1:],
+    ):
+        removed_codes = snapshot_members[previous_date] - snapshot_members[current_date]
+        for code in sorted(removed_codes):
+            key = (code, current_date, "removed")
+            if key in seen:
+                continue
+            seen.add(key)
+            membership[code].append(
+                {
+                    "snapshot_date": current_date,
+                    "effective_date": current_date,
+                    "code": code,
+                    "industry_code": industry_code,
+                    "source": "inferred_from_snapshot_exit",
+                    "_snapshot_date": current_date,
+                    "_effective_date": current_date,
+                    "_event_type": "removed",
+                }
+            )
     for code in membership:
         membership[code].sort(
-            key=lambda row: (row["_effective_date"], row["_snapshot_date"])
+            key=lambda row: (
+                row["_snapshot_date"],
+                row["_effective_date"],
+                row["_event_type"] == "removed",
+            )
         )
     if not membership:
         raise ValueError(f"No {industry_code} membership rows found in {path}.")
@@ -141,15 +199,21 @@ def membership_asof(
     if not events:
         return None
     parse_iso_date(asof_date, "daily row")
-    effective_dates = [event["_effective_date"] for event in events]
-    position = bisect.bisect_right(effective_dates, asof_date) - 1
-    while position >= 0:
-        event = events[position]
-        # Do not use an old effective date before the snapshot that revealed it.
-        if event["_snapshot_date"] <= asof_date:
-            return event
-        position -= 1
-    return None
+    visible: dict[str, str] | None = None
+    for event in events:
+        # A later snapshot supersedes earlier classifications even when the
+        # source's effective date is backdated.
+        if (
+            event["_snapshot_date"] <= asof_date
+            and event["_effective_date"] <= asof_date
+            and (
+                visible is None
+                or (event["_snapshot_date"], event["_effective_date"])
+                >= (visible["_snapshot_date"], visible["_effective_date"])
+            )
+        ):
+            visible = event
+    return visible
 
 
 # 生成过滤后的点时行情面板和审计报告。
@@ -163,7 +227,12 @@ def build_panel(
     daily_fields, daily_rows = read_csv(daily_input)
     if not {"date", "code"}.issubset(daily_fields):
         raise ValueError(f"{daily_input} must contain date and code.")
-    membership = load_membership(membership_input, industry_code)
+    snapshot_metadata_path = membership_input.with_suffix(".metadata.json")
+    membership = load_membership(
+        membership_input,
+        industry_code,
+        snapshot_metadata_path if snapshot_metadata_path.exists() else None,
+    )
     output_fields = daily_fields + [
         field for field in MEMBERSHIP_OUTPUT_FIELDS if field not in daily_fields
     ]
@@ -180,12 +249,16 @@ def build_panel(
         if selected is None:
             counts["dropped_without_point_in_time_membership"] += 1
             continue
+        if selected.get("_event_type") == "removed":
+            counts["dropped_after_membership_exit"] += 1
+            continue
         output = dict(row)
         output.update(
             {
                 "membership_asof_date": row["date"],
                 "membership_snapshot_date": selected["_snapshot_date"],
                 "membership_effective_date": selected["_effective_date"],
+                "membership_event_type": selected["_event_type"],
                 "membership_source": selected.get("source", "unknown"),
                 "point_in_time_member": "1",
             }
@@ -193,6 +266,11 @@ def build_panel(
         output_rows.append(output)
         counts["output_rows"] += 1
 
+    all_events = [
+        event
+        for events in membership.values()
+        for event in events
+    ]
     daily_output.parent.mkdir(parents=True, exist_ok=True)
     with daily_output.open("w", encoding="utf-8-sig", newline="") as target:
         writer = csv.DictWriter(target, fieldnames=output_fields, extrasaction="raise")
@@ -204,9 +282,18 @@ def build_panel(
         "industry_code": industry_code,
         "membership_rule": (
             "For each row, use the latest membership event whose effective "
-            "date and source snapshot date are both not after the row date."
+            "date and source snapshot date are both not after the row date. "
+            "A code absent from a later complete snapshot creates an explicit "
+            "removal event on that snapshot date."
         ),
         "counts": {key: int(value) for key, value in sorted(counts.items())},
+        "membership_event_counts": {
+            "member": sum(event["_event_type"] == "member" for event in all_events),
+            "removed": sum(event["_event_type"] == "removed" for event in all_events),
+        },
+        "membership_snapshot_count": len(
+            {event["_snapshot_date"] for event in all_events}
+        ),
         "unique_input_codes": len({row["code"] for row in daily_rows}),
         "unique_output_codes": len({row["code"] for row in output_rows}),
     }
