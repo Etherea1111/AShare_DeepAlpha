@@ -44,6 +44,7 @@ python3 scripts/clean_industry_data.py
 python3 scripts/split_cleaned_data.py
 python3 scripts/build_train_factors.py
 python3 scripts/fit_model_baselines.py
+python3 scripts/analyze_factor_stability.py
 python3 scripts/backtest_validation.py
 ```
 
@@ -69,10 +70,27 @@ python3 scripts/build_point_in_time_panel.py
 | 训练因子与标签 | `data/processed/train_factor_labels.csv` |
 | 验证预测 | `data/processed/validation_predictions_5d.csv`、`validation_predictions_20d.csv` |
 | 模型报告 | `data/processed/model_baseline_report.json` |
+| 因子 IC 汇总 | `data/analysis/factor_ic_summary.csv` |
+| 因子分年度 IC | `data/analysis/factor_ic_yearly.csv` |
+| 因子两两相关性 | `data/analysis/factor_correlation_pairs.csv` |
+| 因子稳定性报告 | `data/analysis/factor_ic_report.json` |
 | 验证期回测 | `data/backtest/validation_backtest_summary.json` |
 | 回测净值和交易 | `data/backtest/validation_backtest_nav.csv`、`validation_backtest_trades.csv` |
 | 阶段报告 | `reports/项目阶段报告.md` |
 | 版本日志 | `reports/版本更新日志.md` |
+
+## 因子 IC 稳定性
+
+`analyze_factor_stability.py` 按交易日计算各因子与未来 5/20 日收益的截面 Spearman RankIC，汇总年度表现，并用 `horizon - 1` 阶 Newey-West 滞后处理重叠标签。它还会计算因子两两截面相关性，供后续降维和组合构建参考。
+
+当前训练期与验证期结果：
+
+| 期限 | 可用因子 | 同号因子 | 两期均值 IC Spearman | 相对稳定的方向 |
+| --- | ---: | ---: | ---: | --- |
+| 5 日 | 19 | 16 | 0.498 | `close_location`、短中期波动率、20 日换手率均为负；量比和成交额比为弱正 |
+| 20 日 | 19 | 12 | 0.055 | 波动率、换手率和 `close_location` 仍偏负，但多数动量/反转类因子发生符号切换 |
+
+`market_return_1` 和 `market_breadth_up` 在同一交易日内对所有股票相同，无法计算截面 RankIC，因此在汇总中标记为 `no_cross_sectional_variation`。5 日因子的横截面排序在两期之间更稳定；20 日因子的稳定性和符号一致性明显较弱。
 
 ## 最新验证结果
 
@@ -93,7 +111,7 @@ python3 scripts/build_point_in_time_panel.py
 python3 -m unittest discover -s tests -v
 ```
 
-测试覆盖因子未来数据隔离、标签边界、KNN 加速与标准库回退一致性、模型数值逻辑、点时成员退出事件和回测成交规则。
+测试覆盖因子未来数据隔离、标签边界、因子 RankIC 与 Newey-West 计算、分年度汇总、KNN 加速与标准库回退一致性、模型数值逻辑、点时成员退出事件和回测成交规则。
 
 ## 已知限制
 
@@ -110,4 +128,4 @@ python3 -m unittest discover -s tests -v
 2. 与供应商复权 OHLC 核验总收益指数的公司行为处理。
 3. 冻结验证方案后评估测试集，最终样本外集保持到最后一次性使用。
 4. 增加树模型和深度学习模型，并与当前基线和等权组合比较。
-5. 扩展因子 IC 稳定性、分年度表现、行业归因和更多成本场景。
+5. 补齐行业归因、更多成本场景和组合层面的因子稳定性检验。
